@@ -1,10 +1,11 @@
-// package s3 implements an s3 api compatible log store
+// Package s3 implements an s3 api compatible log store
 package s3
 
 import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -118,10 +119,10 @@ func New(u *url.URL) (models.LogStore, error) {
 	return store, nil
 }
 
-func path(appName, callID string) string {
+func logPath(appName, callID string) string {
 	// raw url encode, b/c s3 does not like: & $ @ = : ; + , ?
 	appName = base64.RawURLEncoding.EncodeToString([]byte(appName)) // TODO optimize..
-	return appName + "/" + callID
+	return appName + "/" + callID + "/log"
 }
 
 func (s *store) InsertLog(ctx context.Context, appID, callID string, callLog io.Reader) error {
@@ -130,7 +131,7 @@ func (s *store) InsertLog(ctx context.Context, appID, callID string, callLog io.
 
 	// wrap original reader in a decorator to keep track of read bytes without buffering
 	cr := &countingReader{r: callLog}
-	objectName := path(appID, callID)
+	objectName := logPath(appID, callID)
 	params := &s3manager.UploadInput{
 		Bucket:      aws.String(s.bucket),
 		Key:         aws.String(objectName),
@@ -152,7 +153,7 @@ func (s *store) GetLog(ctx context.Context, appID, callID string) (io.Reader, er
 	ctx, span := trace.StartSpan(ctx, "s3_get_log")
 	defer span.End()
 
-	objectName := path(appID, callID)
+	objectName := logPath(appID, callID)
 	logrus.WithFields(logrus.Fields{"bucketName": s.bucket, "key": objectName}).Debug("Downloading log")
 
 	// stream the logs to an in-memory buffer
@@ -171,6 +172,80 @@ func (s *store) GetLog(ctx context.Context, appID, callID string) (io.Reader, er
 
 	stats.Record(ctx, downloadSizeMeasure.M(size))
 	return bytes.NewReader(target.Bytes()), nil
+}
+
+func callPath(appName, callID string) string {
+	// raw url encode, b/c s3 does not like: & $ @ = : ; + , ?
+	appName = base64.RawURLEncoding.EncodeToString([]byte(appName)) // TODO optimize..
+	return appName + "/" + callID + "/raw"
+}
+
+func (s *store) InsertCall(ctx context.Context, call *models.Call) error {
+	ctx, span := trace.StartSpan(ctx, "s3_insert_call")
+	defer span.End()
+
+	byts, err := json.Marshal(call)
+	if err != nil {
+		return err
+	}
+
+	// wrap original reader in a decorator to keep track of read bytes without buffering
+	//cr := &countingReader{r: callLog}
+
+	objectName := callPath(call.AppName, call.ID)
+	params := &s3manager.UploadInput{
+		Bucket:      aws.String(s.bucket),
+		Key:         aws.String(objectName),
+		Body:        bytes.NewReader(byts),
+		ContentType: aws.String(contentType),
+	}
+
+	logrus.WithFields(logrus.Fields{"bucketName": s.bucket, "key": objectName}).Debug("Uploading call")
+	_, err = s.uploader.UploadWithContext(ctx, params)
+	if err != nil {
+		return fmt.Errorf("failed to write log, %v", err)
+	}
+
+	//stats.Record(ctx, downloadSizeMeasure.M(int64(cr.count)))
+	return nil
+}
+
+// GetCall returns a call at a certain id and app name.
+func (s *store) GetCall(ctx context.Context, appName, callID string) (*models.Call, error) {
+	ctx, span := trace.StartSpan(ctx, "s3_get_call")
+	defer span.End()
+
+	objectName := callPath(appName, callID)
+	logrus.WithFields(logrus.Fields{"bucketName": s.bucket, "key": objectName}).Debug("Downloading call")
+
+	// stream the logs to an in-memory buffer
+	var target aws.WriteAtBuffer
+	_, err := s.downloader.DownloadWithContext(ctx, &target, &s3.GetObjectInput{
+		Bucket: aws.String(s.bucket),
+		Key:    aws.String(objectName),
+	})
+	if err != nil {
+		aerr, ok := err.(awserr.Error)
+		if ok && aerr.Code() == s3.ErrCodeNoSuchKey {
+			return nil, models.ErrCallNotFound
+		}
+		return nil, fmt.Errorf("failed to read log, %v", err)
+	}
+
+	var call models.Call
+	err = json.Unmarshal(target.Bytes(), &call)
+	if err != nil {
+		return nil, err
+	}
+
+	//stats.Record(ctx, downloadSizeMeasure.M(size))
+	return &call, nil
+}
+
+// GetCalls returns a list of calls that satisfy the given CallFilter. If no
+// calls exist, an empty list and a nil error are returned.
+func (s *store) GetCalls(ctx context.Context, filter *models.CallFilter) ([]*models.Call, error) {
+	return nil, nil // TODO(reed):
 }
 
 var (
