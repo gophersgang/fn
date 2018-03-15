@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"fmt"
 	"io/ioutil"
 	"net/http"
 	"net/http/httptest"
@@ -91,7 +90,7 @@ func TestRootMiddleware(t *testing.T) {
 		// this one will override a call to the API based on a header
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.Header.Get("funcit") != "" {
-				fmt.Fprintf(os.Stderr, "breaker breaker!\n")
+				t.Log("breaker breaker!")
 				ctx := r.Context()
 				// TODO: this is a little dicey, should have some functions to set these in case the context keys change or something.
 				ctx = context.WithValue(ctx, "app", "myapp2")
@@ -132,7 +131,7 @@ func TestRootMiddleware(t *testing.T) {
 		for k, v := range test.headers {
 			req.Header.Add(k, v[0])
 		}
-		fmt.Println("TESTING:", req.URL.String())
+		t.Log("TESTING:", req.URL.String())
 		_, rec := routerRequest2(t, srv.Router, req)
 		// t.Log("REC: %+v\n", rec)
 

@@ -78,89 +78,9 @@ func Test(t *testing.T, ds models.Datastore, fnl models.LogStore) {
 	}
 	call := SetupTestCall(t, ctx, ds)
 
-	t.Run("call-log-insert-get", func(t *testing.T) {
-		call.ID = id.New().String()
-		logText := "test"
-		log := strings.NewReader(logText)
-		err := fnl.InsertLog(ctx, call.AppID, call.ID, log)
-		if err != nil {
-			t.Fatalf("Test InsertLog(ctx, call.ID, logText): unexpected error during inserting log `%v`", err)
-		}
-		logEntry, err := fnl.GetLog(ctx, testApp.ID, call.ID)
-		if err != nil {
-			t.Fatalf("Test InsertLog(ctx, call.ID, logText): unexpected error during log get `%v`", err)
-		}
-		var b bytes.Buffer
-		io.Copy(&b, logEntry)
-		if !strings.Contains(b.String(), logText) {
-			t.Fatalf("Test GetLog(ctx, call.ID, logText): unexpected error, log mismatch. "+
-				"Expected: `%v`. Got `%v`.", logText, b.String())
-		}
-	})
-
-	t.Run("call-log-not-found", func(t *testing.T) {
-		call.ID = id.New().String()
-		_, err := fnl.GetLog(ctx, call.AppID, call.ID)
-		if err != models.ErrCallLogNotFound {
-			t.Fatal("GetLog should return not found, but got:", err)
-		}
-	})
-
-	call = new(models.Call)
-	call.CreatedAt = strfmt.DateTime(time.Now())
-	call.Status = "error"
-	call.Error = "ya dun goofed"
-	call.StartedAt = strfmt.DateTime(time.Now())
-	call.CompletedAt = strfmt.DateTime(time.Now())
-	call.AppName = testApp.Name
-	call.Path = testRoute.Path
-
-	t.Run("call-insert", func(t *testing.T) {
-		call.ID = id.New().String()
-		err := fnl.InsertCall(ctx, call)
-		if err != nil {
-			t.Fatalf("Test InsertCall(ctx, &call): unexpected error `%v`", err)
-		}
-	})
-
-	t.Run("call-get", func(t *testing.T) {
-		call.ID = id.New().String()
-		err := fnl.InsertCall(ctx, call)
-		if err != nil {
-			t.Fatalf("Test GetCall: unexpected error `%v`", err)
-		}
-		newCall, err := fnl.GetCall(ctx, call.AppName, call.ID)
-		if err != nil {
-			t.Fatalf("Test GetCall: unexpected error `%v`", err)
-		}
-		if call.ID != newCall.ID {
-			t.Fatalf("Test GetCall: id mismatch `%v` `%v`", call.ID, newCall.ID)
-		}
-		if call.Status != newCall.Status {
-			t.Fatalf("Test GetCall: status mismatch `%v` `%v`", call.Status, newCall.Status)
-		}
-		if call.Error != newCall.Error {
-			t.Fatalf("Test GetCall: error mismatch `%v` `%v`", call.Error, newCall.Error)
-		}
-		if time.Time(call.CreatedAt).Unix() != time.Time(newCall.CreatedAt).Unix() {
-			t.Fatalf("Test GetCall: created_at mismatch `%v` `%v`", call.CreatedAt, newCall.CreatedAt)
-		}
-		if time.Time(call.StartedAt).Unix() != time.Time(newCall.StartedAt).Unix() {
-			t.Fatalf("Test GetCall: started_at mismatch `%v` `%v`", call.StartedAt, newCall.StartedAt)
-		}
-		if time.Time(call.CompletedAt).Unix() != time.Time(newCall.CompletedAt).Unix() {
-			t.Fatalf("Test GetCall: completed_at mismatch `%v` `%v`", call.CompletedAt, newCall.CompletedAt)
-		}
-		if call.AppName != newCall.AppName {
-			t.Fatalf("Test GetCall: app_name mismatch `%v` `%v`", call.AppName, newCall.AppName)
-		}
-		if call.Path != newCall.Path {
-			t.Fatalf("Test GetCall: path mismatch `%v` `%v`", call.Path, newCall.Path)
-		}
-	})
-
+	// test list first, the rest are point lookup tests
 	t.Run("calls-get", func(t *testing.T) {
-		filter := &models.CallFilter{AppName: call.AppName, Path: call.Path, PerPage: 100}
+		filter := &models.CallFilter{AppID: call.AppID, Path: call.Path, PerPage: 100}
 		call.ID = id.New().String()
 		call.CreatedAt = strfmt.DateTime(time.Now())
 		err := fnl.InsertCall(ctx, call)
@@ -227,7 +147,7 @@ func Test(t *testing.T, ds models.Datastore, fnl models.LogStore) {
 		}
 
 		// test that filters actually applied
-		calls, err = fnl.GetCalls(ctx, &models.CallFilter{AppName: "wrongappname", PerPage: 100})
+		calls, err = fnl.GetCalls(ctx, &models.CallFilter{AppID: "wrongappname", PerPage: 100})
 		if err != nil {
 			t.Fatalf("Test GetCalls(ctx, filter): unexpected error `%v`", err)
 		}
@@ -257,6 +177,84 @@ func Test(t *testing.T, ds models.Datastore, fnl models.LogStore) {
 			t.Fatalf("Test GetCalls(ctx, filter): unexpected length `%v`", len(calls))
 		} else if calls[0].ID != c2.ID {
 			t.Fatalf("Test GetCalls: call id not expected %s vs %s", calls[0].ID, c2.ID)
+		}
+	})
+
+	t.Run("call-log-insert-get", func(t *testing.T) {
+		call.ID = id.New().String()
+		logText := "test"
+		log := strings.NewReader(logText)
+		err := fnl.InsertLog(ctx, call.AppID, call.ID, log)
+		if err != nil {
+			t.Fatalf("Test InsertLog(ctx, call.ID, logText): unexpected error during inserting log `%v`", err)
+		}
+		logEntry, err := fnl.GetLog(ctx, call.AppID, call.ID)
+		var b bytes.Buffer
+		io.Copy(&b, logEntry)
+		if !strings.Contains(b.String(), logText) {
+			t.Fatalf("Test GetLog(ctx, call.ID, logText): unexpected error, log mismatch. "+
+				"Expected: `%v`. Got `%v`.", logText, b.String())
+		}
+	})
+
+	t.Run("call-log-not-found", func(t *testing.T) {
+		call.ID = id.New().String()
+		_, err := fnl.GetLog(ctx, call.AppID, call.ID)
+		if err != models.ErrCallLogNotFound {
+			t.Fatal("GetLog should return not found, but got:", err)
+		}
+	})
+
+	call = new(models.Call)
+	call.CreatedAt = strfmt.DateTime(time.Now())
+	call.Status = "error"
+	call.Error = "ya dun goofed"
+	call.StartedAt = strfmt.DateTime(time.Now())
+	call.CompletedAt = strfmt.DateTime(time.Now())
+	call.AppID = testApp.Name
+	call.Path = testRoute.Path
+
+	t.Run("call-insert", func(t *testing.T) {
+		call.ID = id.New().String()
+		err := fnl.InsertCall(ctx, call)
+		if err != nil {
+			t.Fatalf("Test InsertCall(ctx, &call): unexpected error `%v`", err)
+		}
+	})
+
+	t.Run("call-get", func(t *testing.T) {
+		call.ID = id.New().String()
+		err := fnl.InsertCall(ctx, call)
+		if err != nil {
+			t.Fatalf("Test GetCall: unexpected error `%v`", err)
+		}
+		newCall, err := fnl.GetCall(ctx, call.AppID, call.ID)
+		if err != nil {
+			t.Fatalf("Test GetCall: unexpected error `%v`", err)
+		}
+		if call.ID != newCall.ID {
+			t.Fatalf("Test GetCall: id mismatch `%v` `%v`", call.ID, newCall.ID)
+		}
+		if call.Status != newCall.Status {
+			t.Fatalf("Test GetCall: status mismatch `%v` `%v`", call.Status, newCall.Status)
+		}
+		if call.Error != newCall.Error {
+			t.Fatalf("Test GetCall: error mismatch `%v` `%v`", call.Error, newCall.Error)
+		}
+		if time.Time(call.CreatedAt).Unix() != time.Time(newCall.CreatedAt).Unix() {
+			t.Fatalf("Test GetCall: created_at mismatch `%v` `%v`", call.CreatedAt, newCall.CreatedAt)
+		}
+		if time.Time(call.StartedAt).Unix() != time.Time(newCall.StartedAt).Unix() {
+			t.Fatalf("Test GetCall: started_at mismatch `%v` `%v`", call.StartedAt, newCall.StartedAt)
+		}
+		if time.Time(call.CompletedAt).Unix() != time.Time(newCall.CompletedAt).Unix() {
+			t.Fatalf("Test GetCall: completed_at mismatch `%v` `%v`", call.CompletedAt, newCall.CompletedAt)
+		}
+		if call.AppID != newCall.AppID {
+			t.Fatalf("Test GetCall: app_name mismatch `%v` `%v`", call.AppID, newCall.AppID)
+		}
+		if call.Path != newCall.Path {
+			t.Fatalf("Test GetCall: path mismatch `%v` `%v`", call.Path, newCall.Path)
 		}
 	})
 }

@@ -57,6 +57,9 @@ func TestDatastore(t *testing.T) {
 	}
 	datastoretest.Test(t, f)
 
+	// also logs
+	logstoretest.Test(t, f(t))
+
 	// NOTE: sqlite3 does not like ALTER TABLE DROP COLUMN so do not run
 	// migration tests against it, only pg and mysql -- should prove UP migrations
 	// will likely work for sqlite3, but may need separate testing by devs :(
