@@ -18,6 +18,7 @@ import (
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/s3"
 	"github.com/aws/aws-sdk-go/service/s3/s3manager"
+	"github.com/fnproject/fn/api/common"
 	"github.com/fnproject/fn/api/models"
 	"github.com/sirupsen/logrus"
 	"go.opencensus.io/stats"
@@ -189,9 +190,6 @@ func (s *store) InsertCall(ctx context.Context, call *models.Call) error {
 		return err
 	}
 
-	// wrap original reader in a decorator to keep track of read bytes without buffering
-	//cr := &countingReader{r: callLog}
-
 	objectName := callPath(call.AppID, call.ID)
 	params := &s3manager.UploadInput{
 		Bucket:      aws.String(s.bucket),
@@ -206,7 +204,6 @@ func (s *store) InsertCall(ctx context.Context, call *models.Call) error {
 		return fmt.Errorf("failed to write log, %v", err)
 	}
 
-	//stats.Record(ctx, downloadSizeMeasure.M(int64(cr.count)))
 	return nil
 }
 
@@ -238,14 +235,86 @@ func (s *store) GetCall(ctx context.Context, appName, callID string) (*models.Ca
 		return nil, err
 	}
 
-	//stats.Record(ctx, downloadSizeMeasure.M(size))
 	return &call, nil
 }
 
 // GetCalls returns a list of calls that satisfy the given CallFilter. If no
 // calls exist, an empty list and a nil error are returned.
 func (s *store) GetCalls(ctx context.Context, filter *models.CallFilter) ([]*models.Call, error) {
-	return nil, nil // TODO(reed):
+	ctx, span := trace.StartSpan(ctx, "s3_get_calls")
+	defer span.End()
+
+	// NOTE:
+	// if filter.Path != ""
+	//   find marker from marker keys, start there, list keys, get next marker from there
+	// else
+	//   use marker for keys
+
+	// NOTE we need marker keys to support (app is REQUIRED):
+	// 1) quick iteration per path
+	// 2) sorted by id across all path
+	// marker key: m : {app} : {path} : {id}
+	// key: s: {app} : {id}
+
+	// TODO id we need to flip the bits to get DESC order
+	// TODO we need to use first 48 bits of id to approximate created_at
+
+	prefix := "s:" + filter.AppName
+	if filter.Path != "" {
+		prefix = "m:" + filter.AppName + ":" + filter.Path
+	}
+
+	// filter.Cursor is a call id, translate to our key format. if a path is
+	// provided, we list keys from markers instead.
+	var marker string
+	if filter.Cursor != "" {
+		cursor := xorCursor(filter.Cursor)
+		marker = "s:" + filter.AppName + cursor
+		if filter.Path != "" {
+			marker = "m:" + filter.AppName + ":" + filter.Path + ":" + cursor
+		}
+	}
+
+	input := &s3.ListObjectsInput{
+		Bucket:  aws.String(s.bucket),
+		MaxKeys: aws.Int64(int64(filter.PerPage)),
+		Marker:  aws.String(marker),
+		Prefix:  aws.String(prefix),
+	}
+
+	result, err := s.client.ListObjects(input)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list logs: %v", err)
+	}
+
+	calls := make([]*models.Call, 0, len(result.Contents))
+
+	for _, obj := range result.Contents {
+		var app, id string
+		if filter.Path != "" {
+			fields := strings.Split(*obj.Key, ":")
+			// XXX(reed): validate
+			app = fields[1]
+			id = fields[3]
+		} else {
+			fields := strings.Split(*obj.Key, ":")
+			// XXX(reed): validate
+			app = fields[1]
+			id = fields[2]
+		}
+
+		// NOTE: s3 doesn't have a way to get multiple objects so just use GetCall
+		// TODO we should reuse the buffer to decode these
+		call, err := s.GetCall(ctx, app, id)
+		if err != nil {
+			common.Logger(ctx).WithError(err).WithFields(logrus.Fields{"app": app, "id": id}).Error("error filling call object")
+			continue
+		}
+
+		calls = append(calls, call)
+	}
+
+	return calls, nil
 }
 
 var (
