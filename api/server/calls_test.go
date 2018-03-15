@@ -43,10 +43,8 @@ func TestCallGet(t *testing.T) {
 	defer cancel()
 	ds := datastore.NewMockInit(
 		[]*models.App{app},
-		nil,
-		[]*models.Call{call},
 	)
-	fnl := logs.NewMock()
+	fnl := logs.NewMock([]*models.Call{call})
 	srv := testServer(ds, &mqs.Mock{}, fnl, rnr, ServerTypeFull)
 
 	for i, test := range []struct {
@@ -121,10 +119,8 @@ func TestCallList(t *testing.T) {
 	defer cancel()
 	ds := datastore.NewMockInit(
 		[]*models.App{app},
-		nil,
-		[]*models.Call{call, &c2, &c3},
 	)
-	fnl := logs.NewMock()
+	fnl := logs.NewMock([]*models.Call{call, &c2, &c3})
 	srv := testServer(ds, &mqs.Mock{}, fnl, rnr, ServerTypeFull)
 
 	// add / sub 1 second b/c unix time will lop off millis and mess up our comparisons

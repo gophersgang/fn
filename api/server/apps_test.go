@@ -168,8 +168,6 @@ func TestAppList(t *testing.T) {
 			{Name: "myapp2"},
 			{Name: "myapp3"},
 		},
-		nil, // no routes
-		nil, // no calls
 	)
 	fnl := logs.NewMock()
 	srv := testServer(ds, &mqs.Mock{}, fnl, rnr, ServerTypeFull)

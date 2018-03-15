@@ -17,8 +17,18 @@ type mock struct {
 	Calls []*models.Call
 }
 
-func NewMock() models.LogStore {
-	return &mock{Logs: make(map[string][]byte)}
+func NewMock(args ...interface{}) models.LogStore {
+	var mocker mock
+	for _, a := range args {
+		switch x := a.(type) {
+		case []*models.Call:
+			mocker.Calls = x
+		default:
+			panic("unknown type handed to mocker. add me")
+		}
+	}
+	mocker.Logs = make(map[string][]byte)
+	return &mocker
 }
 
 func (m *mock) InsertLog(ctx context.Context, appID, callID string, callLog io.Reader) error {

@@ -14,17 +14,29 @@ import (
 type mock struct {
 	Apps   []*models.App
 	Routes []*models.Route
-	data   map[string][]byte
 
 	models.LogStore
 }
 
 func NewMock() models.Datastore {
-	return NewMockInit(nil, nil, nil)
+	return NewMockInit()
 }
 
-func NewMockInit(apps []*models.App, routes []*models.Route, calls []*models.Call) models.Datastore {
-	return datastoreutil.NewValidator(&mock{apps, routes, make(map[string][]byte), logs.NewMock()})
+// args helps break tests less if we change stuff
+func NewMockInit(args ...interface{}) models.Datastore {
+	var mocker mock
+	for _, a := range args {
+		switch x := a.(type) {
+		case []*models.App:
+			mocker.Apps = x
+		case []*models.Route:
+			mocker.Routes = x
+		default:
+			panic("not accounted for data type sent to mock init. add it")
+		}
+	}
+	mocker.LogStore = logs.NewMock()
+	return datastoreutil.NewValidator(&mocker)
 }
 
 func (m *mock) GetAppID(ctx context.Context, appName string) (string, error) {

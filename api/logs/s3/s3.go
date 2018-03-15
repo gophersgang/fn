@@ -192,7 +192,7 @@ func (s *store) InsertCall(ctx context.Context, call *models.Call) error {
 	// wrap original reader in a decorator to keep track of read bytes without buffering
 	//cr := &countingReader{r: callLog}
 
-	objectName := callPath(call.AppName, call.ID)
+	objectName := callPath(call.AppID, call.ID)
 	params := &s3manager.UploadInput{
 		Bucket:      aws.String(s.bucket),
 		Key:         aws.String(objectName),

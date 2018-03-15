@@ -79,7 +79,7 @@ func TestRootMiddleware(t *testing.T) {
 			{Path: "/app2func", AppID: app2.ID, Image: "fnproject/hello", Type: "sync", Memory: 128, Timeout: 30, IdleTimeout: 30, Headers: map[string][]string{"X-Function": {"Test"}},
 				Config: map[string]string{"NAME": "johnny"},
 			},
-		}, nil,
+		},
 	)
 
 	rnr, cancelrnr := testRunner(t, ds)
