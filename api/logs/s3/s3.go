@@ -19,6 +19,7 @@ import (
 	"github.com/aws/aws-sdk-go/service/s3"
 	"github.com/aws/aws-sdk-go/service/s3/s3manager"
 	"github.com/fnproject/fn/api/common"
+	"github.com/fnproject/fn/api/id"
 	"github.com/fnproject/fn/api/models"
 	"github.com/sirupsen/logrus"
 	"go.opencensus.io/stats"
@@ -177,8 +178,9 @@ func (s *store) GetLog(ctx context.Context, appID, callID string) (io.Reader, er
 
 func callPath(appName, callID string) string {
 	// raw url encode, b/c s3 does not like: & $ @ = : ; + , ?
+
 	appName = base64.RawURLEncoding.EncodeToString([]byte(appName)) // TODO optimize..
-	return appName + "/" + callID + "/raw"
+	return appName + "/" + xorCursor(callID) + "/raw"
 }
 
 func (s *store) InsertCall(ctx context.Context, call *models.Call) error {
@@ -236,6 +238,27 @@ func (s *store) GetCall(ctx context.Context, appName, callID string) (*models.Ca
 	}
 
 	return &call, nil
+}
+
+func xorCursor(oid string) string {
+	// 01C860Z3M9A7WHJ00000000000
+	cp := []byte(oid)
+
+	// id are big endian. we need to flip the bytes, they will remain sortable but we'll get a reverse.
+	for i := range cp[:] {
+		cp[i] ^= 0xFF
+	}
+	return string(cp[:])
+}
+
+func callMarkerKey(app, path, id string) string {
+	// TODO
+	return "m:" + app + ":" + path + ":" + id
+}
+
+func callKey(app, id string) string {
+	// TODO
+	return "s:" + app + ":" + id
 }
 
 // GetCalls returns a list of calls that satisfy the given CallFilter. If no
