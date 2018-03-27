@@ -19,7 +19,6 @@ import (
 	"github.com/aws/aws-sdk-go/service/s3"
 	"github.com/aws/aws-sdk-go/service/s3/s3manager"
 	"github.com/fnproject/fn/api/common"
-	"github.com/fnproject/fn/api/id"
 	"github.com/fnproject/fn/api/models"
 	"github.com/sirupsen/logrus"
 	"go.opencensus.io/stats"
@@ -121,10 +120,8 @@ func New(u *url.URL) (models.LogStore, error) {
 	return store, nil
 }
 
-func logPath(appName, callID string) string {
-	// raw url encode, b/c s3 does not like: & $ @ = : ; + , ?
-	appName = base64.RawURLEncoding.EncodeToString([]byte(appName)) // TODO optimize..
-	return appName + "/" + callID + "/log"
+func logPath(appID, callID string) string {
+	return appID + "/" + callID + "/log"
 }
 
 func (s *store) InsertLog(ctx context.Context, appID, callID string, callLog io.Reader) error {
@@ -176,11 +173,8 @@ func (s *store) GetLog(ctx context.Context, appID, callID string) (io.Reader, er
 	return bytes.NewReader(target.Bytes()), nil
 }
 
-func callPath(appName, callID string) string {
-	// raw url encode, b/c s3 does not like: & $ @ = : ; + , ?
-
-	appName = base64.RawURLEncoding.EncodeToString([]byte(appName)) // TODO optimize..
-	return appName + "/" + xorCursor(callID) + "/raw"
+func callPath(appID, callID string) string {
+	return appID + "/" + xorCursor(callID) + "/raw"
 }
 
 func (s *store) InsertCall(ctx context.Context, call *models.Call) error {
@@ -210,11 +204,11 @@ func (s *store) InsertCall(ctx context.Context, call *models.Call) error {
 }
 
 // GetCall returns a call at a certain id and app name.
-func (s *store) GetCall(ctx context.Context, appName, callID string) (*models.Call, error) {
+func (s *store) GetCall(ctx context.Context, appID, callID string) (*models.Call, error) {
 	ctx, span := trace.StartSpan(ctx, "s3_get_call")
 	defer span.End()
 
-	objectName := callPath(appName, callID)
+	objectName := callPath(appID, callID)
 	logrus.WithFields(logrus.Fields{"bucketName": s.bucket, "key": objectName}).Debug("Downloading call")
 
 	// stream the logs to an in-memory buffer
@@ -244,7 +238,7 @@ func xorCursor(oid string) string {
 	// 01C860Z3M9A7WHJ00000000000
 	cp := []byte(oid)
 
-	// id are big endian. we need to flip the bytes, they will remain sortable but we'll get a reverse.
+	// id are big endian. we need to flip the bytes, they will remain sortable but we'll get a reverse sort.
 	for i := range cp[:] {
 		cp[i] ^= 0xFF
 	}
@@ -282,9 +276,9 @@ func (s *store) GetCalls(ctx context.Context, filter *models.CallFilter) ([]*mod
 	// TODO id we need to flip the bits to get DESC order
 	// TODO we need to use first 48 bits of id to approximate created_at
 
-	prefix := "s:" + filter.AppName
+	prefix := "s:" + filter.AppID
 	if filter.Path != "" {
-		prefix = "m:" + filter.AppName + ":" + filter.Path
+		prefix = "m:" + filter.AppID + ":" + filter.Path
 	}
 
 	// filter.Cursor is a call id, translate to our key format. if a path is
@@ -292,9 +286,9 @@ func (s *store) GetCalls(ctx context.Context, filter *models.CallFilter) ([]*mod
 	var marker string
 	if filter.Cursor != "" {
 		cursor := xorCursor(filter.Cursor)
-		marker = "s:" + filter.AppName + cursor
+		marker = "s:" + filter.AppID + cursor
 		if filter.Path != "" {
-			marker = "m:" + filter.AppName + ":" + filter.Path + ":" + cursor
+			marker = "m:" + filter.AppID + ":" + filter.Path + ":" + cursor
 		}
 	}
 
