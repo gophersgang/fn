@@ -35,6 +35,11 @@ import (
 
 const (
 	contentType = "text/plain"
+
+	// key prefixes
+	callKeyPrefix    = "c:"
+	callMarkerPrefix = "m:"
+	logKeyPrefix     = "l:"
 )
 
 type store struct {
@@ -120,17 +125,13 @@ func New(u *url.URL) (models.LogStore, error) {
 	return store, nil
 }
 
-func logPath(appID, callID string) string {
-	return appID + "/" + callID + "/log"
-}
-
 func (s *store) InsertLog(ctx context.Context, appID, callID string, callLog io.Reader) error {
 	ctx, span := trace.StartSpan(ctx, "s3_insert_log")
 	defer span.End()
 
 	// wrap original reader in a decorator to keep track of read bytes without buffering
 	cr := &countingReader{r: callLog}
-	objectName := logPath(appID, callID)
+	objectName := logKey(appID, callID)
 	params := &s3manager.UploadInput{
 		Bucket:      aws.String(s.bucket),
 		Key:         aws.String(objectName),
@@ -152,7 +153,7 @@ func (s *store) GetLog(ctx context.Context, appID, callID string) (io.Reader, er
 	ctx, span := trace.StartSpan(ctx, "s3_get_log")
 	defer span.End()
 
-	objectName := logPath(appID, callID)
+	objectName := logKey(appID, callID)
 	logrus.WithFields(logrus.Fields{"bucketName": s.bucket, "key": objectName}).Debug("Downloading log")
 
 	// stream the logs to an in-memory buffer
@@ -173,10 +174,6 @@ func (s *store) GetLog(ctx context.Context, appID, callID string) (io.Reader, er
 	return bytes.NewReader(target.Bytes()), nil
 }
 
-func callPath(appID, callID string) string {
-	return appID + "/" + xorCursor(callID) + "/raw"
-}
-
 func (s *store) InsertCall(ctx context.Context, call *models.Call) error {
 	ctx, span := trace.StartSpan(ctx, "s3_insert_call")
 	defer span.End()
@@ -186,7 +183,7 @@ func (s *store) InsertCall(ctx context.Context, call *models.Call) error {
 		return err
 	}
 
-	objectName := callPath(call.AppID, call.ID)
+	objectName := callKey(call.AppID, call.ID)
 	params := &s3manager.UploadInput{
 		Bucket:      aws.String(s.bucket),
 		Key:         aws.String(objectName),
@@ -200,6 +197,26 @@ func (s *store) InsertCall(ctx context.Context, call *models.Call) error {
 		return fmt.Errorf("failed to write log, %v", err)
 	}
 
+	// at this point, they can point lookup the log and it will work. now, we can try to upload
+	// the marker key. if the marker key upload fails, the user will simply not see this entry
+	// when listing AND specifying a route path. (NOTE: this behavior will go away if we stop listing
+	// by route -> triggers)
+
+	objectName = callMarkerKey(call.AppID, call.Path, call.ID)
+	params = &s3manager.UploadInput{
+		Bucket:      aws.String(s.bucket),
+		Key:         aws.String(objectName),
+		Body:        bytes.NewReader([]byte{}),
+		ContentType: aws.String(contentType),
+	}
+
+	logrus.WithFields(logrus.Fields{"bucketName": s.bucket, "key": objectName}).Debug("Uploading call")
+	_, err = s.uploader.UploadWithContext(ctx, params)
+	if err != nil {
+		// XXX(reed): we could just log this?
+		return fmt.Errorf("failed to write marker key for log, %v", err)
+	}
+
 	return nil
 }
 
@@ -208,7 +225,7 @@ func (s *store) GetCall(ctx context.Context, appID, callID string) (*models.Call
 	ctx, span := trace.StartSpan(ctx, "s3_get_call")
 	defer span.End()
 
-	objectName := callPath(appID, callID)
+	objectName := callKey(appID, callID)
 	logrus.WithFields(logrus.Fields{"bucketName": s.bucket, "key": objectName}).Debug("Downloading call")
 
 	// stream the logs to an in-memory buffer
@@ -247,12 +264,16 @@ func xorCursor(oid string) string {
 
 func callMarkerKey(app, path, id string) string {
 	id = xorCursor(id)
-	return "m:" + app + ":" + path + ":" + id
+	return callMarkerPrefix + app + ":" + path + ":" + id
 }
 
 func callKey(app, id string) string {
 	id = xorCursor(id)
-	return "s:" + app + ":" + id
+	return callKeyPrefix + app + ":" + id
+}
+
+func logKey(appID, callID string) string {
+	return logKeyPrefix + appID + ":" + callID
 }
 
 // GetCalls returns a list of calls that satisfy the given CallFilter. If no
@@ -318,9 +339,12 @@ func (s *store) GetCalls(ctx context.Context, filter *models.CallFilter) ([]*mod
 		return nil, fmt.Errorf("failed to list logs: %v", err)
 	}
 
+	// TODO we could add an additional check here to slice to per page if the api doesn't
+	// implement the max keys parameter (and we probably should...)
 	calls := make([]*models.Call, 0, len(result.Contents))
 
 	for _, obj := range result.Contents {
+
 		var app, id string
 		if filter.Path != "" {
 			fields := strings.Split(*obj.Key, ":")
@@ -334,7 +358,8 @@ func (s *store) GetCalls(ctx context.Context, filter *models.CallFilter) ([]*mod
 			id = fields[2]
 		}
 
-		// TODO check ToTime
+		// we have to flip the bits back in order to use GetCall directly
+		id = xorCursor(id)
 
 		// NOTE: s3 doesn't have a way to get multiple objects so just use GetCall
 		// TODO we should reuse the buffer to decode these
@@ -342,6 +367,13 @@ func (s *store) GetCalls(ctx context.Context, filter *models.CallFilter) ([]*mod
 		if err != nil {
 			common.Logger(ctx).WithError(err).WithFields(logrus.Fields{"app": app, "id": id}).Error("error filling call object")
 			continue
+		}
+
+		if t := time.Time(filter.ToTime); !t.IsZero() && !time.Time(call.CreatedAt).Before(t) {
+			// make sure it fits our time bounds. break, and assume this is it, even
+			// though that may not be the case since id and created at are not the same, it's a
+			// pretty good approximation
+			break
 		}
 
 		calls = append(calls, call)

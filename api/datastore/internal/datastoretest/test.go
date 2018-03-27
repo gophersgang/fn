@@ -6,6 +6,7 @@ import (
 	"log"
 	"testing"
 
+	"github.com/fnproject/fn/api/id"
 	"github.com/fnproject/fn/api/models"
 	"github.com/gin-gonic/gin"
 	"github.com/sirupsen/logrus"

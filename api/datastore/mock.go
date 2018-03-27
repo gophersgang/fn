@@ -101,7 +101,6 @@ func (m *mock) UpdateApp(ctx context.Context, app *models.App) (*models.App, err
 }
 
 func (m *mock) RemoveApp(ctx context.Context, appID string) error {
-	m.batchDeleteCalls(ctx, appID)
 	m.batchDeleteRoutes(ctx, appID)
 	for i, a := range m.Apps {
 		if a.ID == appID {

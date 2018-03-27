@@ -50,9 +50,9 @@ func (m *mock) InsertCall(ctx context.Context, call *models.Call) error {
 	return nil
 }
 
-func (m *mock) GetCall(ctx context.Context, appName, callID string) (*models.Call, error) {
+func (m *mock) GetCall(ctx context.Context, appID, callID string) (*models.Call, error) {
 	for _, t := range m.Calls {
-		if t.ID == callID && t.AppName == appName {
+		if t.ID == callID && t.AppID == appID {
 			return t, nil
 		}
 	}
@@ -77,7 +77,7 @@ func (m *mock) GetCalls(ctx context.Context, filter *models.CallFilter) ([]*mode
 			break
 		}
 
-		if (filter.AppName == "" || c.AppName == filter.AppName) &&
+		if (filter.AppID == "" || c.AppID == filter.AppID) &&
 			(filter.Path == "" || filter.Path == c.Path) &&
 			(time.Time(filter.FromTime).IsZero() || time.Time(filter.FromTime).Before(time.Time(c.CreatedAt))) &&
 			(time.Time(filter.ToTime).IsZero() || time.Time(c.CreatedAt).Before(time.Time(filter.ToTime))) &&
