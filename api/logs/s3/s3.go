@@ -4,13 +4,13 @@ package s3
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/awserr"
@@ -246,12 +246,12 @@ func xorCursor(oid string) string {
 }
 
 func callMarkerKey(app, path, id string) string {
-	// TODO
+	id = xorCursor(id)
 	return "m:" + app + ":" + path + ":" + id
 }
 
 func callKey(app, id string) string {
-	// TODO
+	id = xorCursor(id)
 	return "s:" + app + ":" + id
 }
 
@@ -272,13 +272,27 @@ func (s *store) GetCalls(ctx context.Context, filter *models.CallFilter) ([]*mod
 	// 2) sorted by id across all path
 	// marker key: m : {app} : {path} : {id}
 	// key: s: {app} : {id}
+	//
+	// also s3 api is returns sorted in lexicographic order, we need the reverse of this.
 
-	// TODO id we need to flip the bits to get DESC order
-	// TODO we need to use first 48 bits of id to approximate created_at
+	// we need to use first 48 bits of id to approximate created_at, to skip over records
+	// if looking far into the past.
+	id := ""
+	if t := time.Time(filter.FromTime); !t.IsZero() {
+		ms := uint64(t.Unix()*1000) + uint64(t.Nanosecond()/int(time.Millisecond))
+		var buf [6]byte
+		buf[0] = byte(ms >> 40)
+		buf[1] = byte(ms >> 32)
+		buf[2] = byte(ms >> 24)
+		buf[3] = byte(ms >> 16)
+		buf[4] = byte(ms >> 8)
+		buf[5] = byte(ms)
+		id = xorCursor(string(buf[:]))
+	}
 
-	prefix := "s:" + filter.AppID
+	prefix := callKey(filter.AppID, id)
 	if filter.Path != "" {
-		prefix = "m:" + filter.AppID + ":" + filter.Path
+		prefix = callMarkerKey(filter.AppID, filter.Path, id)
 	}
 
 	// filter.Cursor is a call id, translate to our key format. if a path is
@@ -319,6 +333,8 @@ func (s *store) GetCalls(ctx context.Context, filter *models.CallFilter) ([]*mod
 			app = fields[1]
 			id = fields[2]
 		}
+
+		// TODO check ToTime
 
 		// NOTE: s3 doesn't have a way to get multiple objects so just use GetCall
 		// TODO we should reuse the buffer to decode these
