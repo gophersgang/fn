@@ -34,12 +34,10 @@ import (
 // TODO do we need to use the v2 API? can't find BMC object store docs :/
 
 const (
-	contentType = "text/plain"
-
 	// key prefixes
-	callKeyPrefix    = "c:"
-	callMarkerPrefix = "m:"
-	logKeyPrefix     = "l:"
+	callKeyPrefix    = "c/"
+	callMarkerPrefix = "m/"
+	logKeyPrefix     = "l/"
 )
 
 type store struct {
@@ -136,7 +134,7 @@ func (s *store) InsertLog(ctx context.Context, appID, callID string, callLog io.
 		Bucket:      aws.String(s.bucket),
 		Key:         aws.String(objectName),
 		Body:        cr,
-		ContentType: aws.String(contentType),
+		ContentType: aws.String("text/plain"),
 	}
 
 	logrus.WithFields(logrus.Fields{"bucketName": s.bucket, "key": objectName}).Debug("Uploading log")
@@ -183,18 +181,21 @@ func (s *store) InsertCall(ctx context.Context, call *models.Call) error {
 		return err
 	}
 
+	cr := &countingReader{r: bytes.NewReader(byts)}
+
 	objectName := callKey(call.AppID, call.ID)
+	fmt.Println("YODAWG", objectName)
 	params := &s3manager.UploadInput{
 		Bucket:      aws.String(s.bucket),
 		Key:         aws.String(objectName),
-		Body:        bytes.NewReader(byts),
-		ContentType: aws.String(contentType),
+		Body:        cr,
+		ContentType: aws.String("text/plain"),
 	}
 
 	logrus.WithFields(logrus.Fields{"bucketName": s.bucket, "key": objectName}).Debug("Uploading call")
 	_, err = s.uploader.UploadWithContext(ctx, params)
 	if err != nil {
-		return fmt.Errorf("failed to write log, %v", err)
+		return fmt.Errorf("failed to insert call, %v", err)
 	}
 
 	// at this point, they can point lookup the log and it will work. now, we can try to upload
@@ -207,7 +208,7 @@ func (s *store) InsertCall(ctx context.Context, call *models.Call) error {
 		Bucket:      aws.String(s.bucket),
 		Key:         aws.String(objectName),
 		Body:        bytes.NewReader([]byte{}),
-		ContentType: aws.String(contentType),
+		ContentType: aws.String("text/plain"),
 	}
 
 	logrus.WithFields(logrus.Fields{"bucketName": s.bucket, "key": objectName}).Debug("Uploading call")
@@ -264,16 +265,16 @@ func xorCursor(oid string) string {
 
 func callMarkerKey(app, path, id string) string {
 	id = xorCursor(id)
-	return callMarkerPrefix + app + ":" + path + ":" + id
+	return callMarkerPrefix + app + "/" + path + "/" + id
 }
 
 func callKey(app, id string) string {
 	id = xorCursor(id)
-	return callKeyPrefix + app + ":" + id
+	return callKeyPrefix + app + "/" + id
 }
 
 func logKey(appID, callID string) string {
-	return logKeyPrefix + appID + ":" + callID
+	return logKeyPrefix + appID + "/" + callID
 }
 
 // GetCalls returns a list of calls that satisfy the given CallFilter. If no

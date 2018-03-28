@@ -100,7 +100,7 @@ func TestRouteCreate(t *testing.T) {
 
 	a := &models.App{Name: "a"}
 	a.SetDefaults()
-	commonDS := datastore.NewMockInit([]*models.App{a}, nil, nil)
+	commonDS := datastore.NewMockInit([]*models.App{a})
 	for i, test := range []routeTestCase{
 		// errors
 		{commonDS, logs.NewMock(), http.MethodPost, "/v1/apps/a/routes", ``, http.StatusBadRequest, models.ErrInvalidJSON},
@@ -135,7 +135,7 @@ func TestRoutePut(t *testing.T) {
 
 	a := &models.App{Name: "a"}
 	a.SetDefaults()
-	commonDS := datastore.NewMockInit([]*models.App{a}, nil, nil)
+	commonDS := datastore.NewMockInit([]*models.App{a})
 
 	for i, test := range []routeTestCase{
 		// errors (NOTE: this route doesn't exist yet)

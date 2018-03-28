@@ -6,6 +6,6 @@ import (
 )
 
 func TestDatastore(t *testing.T) {
-	ds := logTesting.SetupSQLiteDS(t)
-	logTesting.Test(t, ds, ds)
+	ls := NewMock()
+	logTesting.Test(t, ls)
 }

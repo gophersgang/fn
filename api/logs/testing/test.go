@@ -8,12 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/fnproject/fn/api/datastore/sql"
 	"github.com/fnproject/fn/api/id"
 	"github.com/fnproject/fn/api/models"
 	"github.com/go-openapi/strfmt"
-	"net/url"
-	"os"
 )
 
 var testApp = &models.App{
@@ -28,20 +25,8 @@ var testRoute = &models.Route{
 	Format: "http",
 }
 
-func SetupTestCall(t *testing.T, ctx context.Context, ds models.Datastore) *models.Call {
+func SetupTestCall(t *testing.T, ctx context.Context, ls models.LogStore) *models.Call {
 	testApp.SetDefaults()
-
-	_, err := ds.InsertApp(ctx, testApp)
-	if err != nil {
-		t.Log(err.Error())
-		t.Fatalf("Test InsertLog(ctx, call.ID, logText): unable to insert app, err: `%v`", err)
-	}
-	testRoute.AppID = testApp.ID
-	_, err = ds.InsertRoute(ctx, testRoute)
-	if err != nil {
-		t.Log(err.Error())
-		t.Fatalf("Test InsertLog(ctx, call.ID, logText): unable to insert app route, err: `%v`", err)
-	}
 
 	var call models.Call
 	call.AppID = testApp.ID
@@ -56,27 +41,9 @@ func SetupTestCall(t *testing.T, ctx context.Context, ds models.Datastore) *mode
 
 const tmpLogDb = "/tmp/func_test_log.db"
 
-func SetupSQLiteDS(t *testing.T) models.Datastore {
-	os.Remove(tmpLogDb)
+func Test(t *testing.T, fnl models.LogStore) {
 	ctx := context.Background()
-	uLog, err := url.Parse("sqlite3://" + tmpLogDb)
-	if err != nil {
-		t.Fatalf("failed to parse url: %v", err)
-	}
-
-	ds, err := sql.New(ctx, uLog)
-	if err != nil {
-		t.Fatalf("failed to create sqlite3 datastore: %v", err)
-	}
-	return ds
-}
-
-func Test(t *testing.T, ds models.Datastore, fnl models.LogStore) {
-	ctx := context.Background()
-	if ds == nil {
-		ds = SetupSQLiteDS(t)
-	}
-	call := SetupTestCall(t, ctx, ds)
+	call := SetupTestCall(t, ctx, fnl)
 
 	// test list first, the rest are point lookup tests
 	t.Run("calls-get", func(t *testing.T) {

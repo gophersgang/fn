@@ -105,7 +105,7 @@ func TestRootMiddleware(t *testing.T) {
 	})
 	srv.AddRootMiddlewareFunc(func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			fmt.Fprintf(os.Stderr, "middle log\n")
+			t.Log("middle log")
 			next.ServeHTTP(w, r)
 		})
 	})
