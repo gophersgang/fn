@@ -4,6 +4,7 @@ package s3
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -19,6 +20,7 @@ import (
 	"github.com/aws/aws-sdk-go/service/s3"
 	"github.com/aws/aws-sdk-go/service/s3/s3manager"
 	"github.com/fnproject/fn/api/common"
+	"github.com/fnproject/fn/api/id"
 	"github.com/fnproject/fn/api/models"
 	"github.com/sirupsen/logrus"
 	"go.opencensus.io/stats"
@@ -184,7 +186,7 @@ func (s *store) InsertCall(ctx context.Context, call *models.Call) error {
 	cr := &countingReader{r: bytes.NewReader(byts)}
 
 	objectName := callKey(call.AppID, call.ID)
-	fmt.Println("YODAWG", objectName)
+	fmt.Println("YODAWG", objectName, call.ID)
 	params := &s3manager.UploadInput{
 		Bucket:      aws.String(s.bucket),
 		Key:         aws.String(objectName),
@@ -229,11 +231,15 @@ func (s *store) GetCall(ctx context.Context, appID, callID string) (*models.Call
 	objectName := callKey(appID, callID)
 	logrus.WithFields(logrus.Fields{"bucketName": s.bucket, "key": objectName}).Debug("Downloading call")
 
+	return s.getCallByKey(ctx, objectName)
+}
+
+func (s *store) getCallByKey(ctx context.Context, key string) (*models.Call, error) {
 	// stream the logs to an in-memory buffer
 	var target aws.WriteAtBuffer
 	_, err := s.downloader.DownloadWithContext(ctx, &target, &s3.GetObjectInput{
 		Bucket: aws.String(s.bucket),
-		Key:    aws.String(objectName),
+		Key:    aws.String(key),
 	})
 	if err != nil {
 		aerr, ok := err.(awserr.Error)
@@ -252,24 +258,30 @@ func (s *store) GetCall(ctx context.Context, appID, callID string) (*models.Call
 	return &call, nil
 }
 
-func xorCursor(oid string) string {
-	// 01C860Z3M9A7WHJ00000000000
-	cp := []byte(oid)
-
-	// id are big endian. we need to flip the bytes, they will remain sortable but we'll get a reverse sort.
-	for i := range cp[:] {
-		cp[i] ^= 0xFF
+func flipCursor(oid string) string {
+	if oid == "" {
+		return ""
 	}
-	return string(cp[:])
+
+	// e.g.: 01C860Z3M9A7WHJ00000000000
+	var rid id.Id
+	copy(rid[:], oid)
+	return rid.MarshalDescending()[:len(oid)]
 }
 
 func callMarkerKey(app, path, id string) string {
-	id = xorCursor(id)
+	id = flipCursor(id)
+	// s3 urls use / and are url, we need to encode this since paths have / in them
+	path = base64.RawURLEncoding.EncodeToString([]byte(path))
 	return callMarkerPrefix + app + "/" + path + "/" + id
 }
 
 func callKey(app, id string) string {
-	id = xorCursor(id)
+	id = flipCursor(id)
+	return callKeyFlipped(app, id)
+}
+
+func callKeyFlipped(app, id string) string {
 	return callKeyPrefix + app + "/" + id
 }
 
@@ -279,9 +291,14 @@ func logKey(appID, callID string) string {
 
 // GetCalls returns a list of calls that satisfy the given CallFilter. If no
 // calls exist, an empty list and a nil error are returned.
+// NOTE: this relies on call ids being lexicographically sortable and <= 16 byte
 func (s *store) GetCalls(ctx context.Context, filter *models.CallFilter) ([]*models.Call, error) {
 	ctx, span := trace.StartSpan(ctx, "s3_get_calls")
 	defer span.End()
+
+	if filter.AppID == "" {
+		return nil, errors.New("s3 store does not support listing across all apps")
+	}
 
 	// NOTE:
 	// if filter.Path != ""
@@ -295,36 +312,38 @@ func (s *store) GetCalls(ctx context.Context, filter *models.CallFilter) ([]*mod
 	// marker key: m : {app} : {path} : {id}
 	// key: s: {app} : {id}
 	//
-	// also s3 api is returns sorted in lexicographic order, we need the reverse of this.
+	// also s3 api returns sorted in lexicographic order, we need the reverse of this.
 
 	// we need to use first 48 bits of id to approximate created_at, to skip over records
 	// if looking far into the past.
-	id := ""
+	mid := ""
 	if t := time.Time(filter.FromTime); !t.IsZero() {
 		ms := uint64(t.Unix()*1000) + uint64(t.Nanosecond()/int(time.Millisecond))
-		var buf [6]byte
+		var buf id.Id
 		buf[0] = byte(ms >> 40)
 		buf[1] = byte(ms >> 32)
 		buf[2] = byte(ms >> 24)
 		buf[3] = byte(ms >> 16)
 		buf[4] = byte(ms >> 8)
 		buf[5] = byte(ms)
-		id = xorCursor(string(buf[:]))
+		mid = buf.String()[:10]
+		// timestamp is first 10 bytes of string encoded
 	}
 
-	prefix := callKey(filter.AppID, id)
+	prefix := callKey(filter.AppID, mid)
 	if filter.Path != "" {
-		prefix = callMarkerKey(filter.AppID, filter.Path, id)
+		prefix = callMarkerKey(filter.AppID, filter.Path, mid)
 	}
+
+	fmt.Println("prefix", prefix, "app", filter.AppID, "path", filter.Path, "id", mid)
 
 	// filter.Cursor is a call id, translate to our key format. if a path is
 	// provided, we list keys from markers instead.
 	var marker string
 	if filter.Cursor != "" {
-		cursor := xorCursor(filter.Cursor)
-		marker = "s:" + filter.AppID + cursor
+		marker = callKey(filter.AppID, filter.Cursor)
 		if filter.Path != "" {
-			marker = "m:" + filter.AppID + ":" + filter.Path + ":" + cursor
+			marker = callMarkerKey(filter.AppID, filter.Path, filter.Cursor)
 		}
 	}
 
@@ -340,33 +359,46 @@ func (s *store) GetCalls(ctx context.Context, filter *models.CallFilter) ([]*mod
 		return nil, fmt.Errorf("failed to list logs: %v", err)
 	}
 
+	fmt.Println("listo", len(result.Contents), *input.Marker, *input.Prefix)
+
 	// TODO we could add an additional check here to slice to per page if the api doesn't
 	// implement the max keys parameter (and we probably should...)
 	calls := make([]*models.Call, 0, len(result.Contents))
 
 	for _, obj := range result.Contents {
+		// extract the app and id from the key to lookup the object, this also
+		// validates we aren't reading strangely keyed objects from the bucket.
 
 		var app, id string
 		if filter.Path != "" {
-			fields := strings.Split(*obj.Key, ":")
-			// XXX(reed): validate
+			fields := strings.Split(*obj.Key, "/")
+			if len(fields) != 4 {
+				return calls, fmt.Errorf("invalid key in call markers: %v", *obj.Key)
+			}
 			app = fields[1]
 			id = fields[3]
 		} else {
-			fields := strings.Split(*obj.Key, ":")
-			// XXX(reed): validate
+			fields := strings.Split(*obj.Key, "/")
 			app = fields[1]
 			id = fields[2]
+			if len(fields) != 3 {
+				return calls, fmt.Errorf("invalid key in calls: %v", *obj.Key)
+			}
 		}
 
-		// we have to flip the bits back in order to use GetCall directly
-		id = xorCursor(id)
+		// the id here is already reverse encoded, keep it that way.
+		objectName := callKeyFlipped(app, id)
 
 		// NOTE: s3 doesn't have a way to get multiple objects so just use GetCall
 		// TODO we should reuse the buffer to decode these
-		call, err := s.GetCall(ctx, app, id)
+		call, err := s.getCallByKey(ctx, objectName)
 		if err != nil {
 			common.Logger(ctx).WithError(err).WithFields(logrus.Fields{"app": app, "id": id}).Error("error filling call object")
+			continue
+		}
+
+		if t := time.Time(filter.FromTime); !t.IsZero() && time.Time(call.CreatedAt).Before(t) {
+			// look at ones in the future
 			continue
 		}
 

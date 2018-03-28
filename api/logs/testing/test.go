@@ -34,7 +34,6 @@ func SetupTestCall(t *testing.T, ctx context.Context, ls models.LogStore) *model
 	call.Status = "success"
 	call.StartedAt = strfmt.DateTime(time.Now())
 	call.CompletedAt = strfmt.DateTime(time.Now())
-	call.AppID = testApp.ID
 	call.Path = testRoute.Path
 	return &call
 }
@@ -48,8 +47,9 @@ func Test(t *testing.T, fnl models.LogStore) {
 	// test list first, the rest are point lookup tests
 	t.Run("calls-get", func(t *testing.T) {
 		filter := &models.CallFilter{AppID: call.AppID, Path: call.Path, PerPage: 100}
-		call.ID = id.New().String()
-		call.CreatedAt = strfmt.DateTime(time.Now())
+		now := time.Now()
+		call.CreatedAt = strfmt.DateTime(now)
+		call.ID = id.NewWithTime(now).String()
 		err := fnl.InsertCall(ctx, call)
 		if err != nil {
 			t.Fatal(err)
@@ -64,10 +64,13 @@ func Test(t *testing.T, fnl models.LogStore) {
 
 		c2 := *call
 		c3 := *call
-		c2.ID = id.New().String()
-		c2.CreatedAt = strfmt.DateTime(time.Now().Add(100 * time.Millisecond)) // add ms cuz db uses it for sort
-		c3.ID = id.New().String()
-		c3.CreatedAt = strfmt.DateTime(time.Now().Add(200 * time.Millisecond))
+		now = time.Now().Add(100 * time.Millisecond)
+		c2.CreatedAt = strfmt.DateTime(now) // add ms cuz db uses it for sort
+		c2.ID = id.NewWithTime(now).String()
+
+		now = time.Now().Add(200 * time.Millisecond)
+		c3.CreatedAt = strfmt.DateTime(now)
+		c3.ID = id.NewWithTime(now).String()
 
 		err = fnl.InsertCall(ctx, &c2)
 		if err != nil {
@@ -79,7 +82,7 @@ func Test(t *testing.T, fnl models.LogStore) {
 		}
 
 		// test that no filter works too
-		calls, err = fnl.GetCalls(ctx, &models.CallFilter{PerPage: 100})
+		calls, err = fnl.GetCalls(ctx, &models.CallFilter{AppID: call.AppID, PerPage: 100})
 		if err != nil {
 			t.Fatalf("Test GetCalls(ctx, filter): unexpected error `%v`", err)
 		}
@@ -122,7 +125,7 @@ func Test(t *testing.T, fnl models.LogStore) {
 			t.Fatalf("Test GetCalls(ctx, filter): unexpected length `%v`", len(calls))
 		}
 
-		calls, err = fnl.GetCalls(ctx, &models.CallFilter{Path: "wrongpath", PerPage: 100})
+		calls, err = fnl.GetCalls(ctx, &models.CallFilter{AppID: call.AppID, Path: "wrongpath", PerPage: 100})
 		if err != nil {
 			t.Fatalf("Test GetCalls(ctx, filter): unexpected error `%v`", err)
 		}
@@ -135,6 +138,7 @@ func Test(t *testing.T, fnl models.LogStore) {
 			PerPage:  100,
 			FromTime: call.CreatedAt,
 			ToTime:   c3.CreatedAt,
+			AppID:    call.AppID,
 		}
 		calls, err = fnl.GetCalls(ctx, filter)
 		if err != nil {

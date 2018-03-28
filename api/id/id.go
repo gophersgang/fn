@@ -2,12 +2,26 @@ package id
 
 import (
 	"errors"
+	"math/rand"
 	"net"
-	"sync/atomic"
 	"time"
+
+	"github.com/oklog/ulid"
 )
 
-type Id [16]byte
+type Id ulid.ULID
+
+var (
+	entropy = rand.New(rand.NewSource(time.Now().UnixNano()))
+)
+
+func New() Id {
+	return Id(ulid.MustNew(ulid.Timestamp(time.Now()), entropy))
+}
+
+func NewWithTime(t time.Time) Id {
+	return Id(ulid.MustNew(ulid.Timestamp(t), entropy))
+}
 
 var (
 	machineID uint64
@@ -44,13 +58,13 @@ func SetMachineIdHost(addr net.IP, port uint16) {
 //
 // Ids are sortable within (not between, thanks to clocks) each machine, with
 // a modified base32 encoding exposed for convenience in API usage.
-func New() Id {
-	t := time.Now()
-	// NOTE compiler optimizes out division by constant for us
-	ms := uint64(t.Unix())*1000 + uint64(t.Nanosecond()/int(time.Millisecond))
-	count := atomic.AddUint32(&counter, 1)
-	return newID(ms, machineID, count)
-}
+//func New() Id {
+//t := time.Now()
+//// NOTE compiler optimizes out division by constant for us
+//ms := uint64(t.Unix())*1000 + uint64(t.Nanosecond()/int(time.Millisecond))
+//count := atomic.AddUint32(&counter, 1)
+//return newID(ms, machineID, count)
+//}
 
 func newID(ms, machineID uint64, count uint32) Id {
 	var id Id
@@ -121,6 +135,69 @@ func (id *Id) UnmarshalBinary(data []byte) error {
 
 // Encoding is the base 32 encoding alphabet used in Id strings.
 const Encoding = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
+
+// reverse encoding useful for sorting, descending
+var rEncoding = reverseString(Encoding)
+
+func reverseString(input string) string {
+	// rsc: http://groups.google.com/group/golang-nuts/browse_thread/thread/a0fb81698275eede
+
+	// Get Unicode code points.
+	n := 0
+	rune := make([]rune, len(input))
+	for _, r := range input {
+		rune[n] = r
+		n++
+	}
+	rune = rune[0:n]
+	// Reverse
+	for i := 0; i < n/2; i++ {
+		rune[i], rune[n-1-i] = rune[n-1-i], rune[i]
+	}
+
+	// Convert back to UTF-8.
+	return string(rune)
+}
+
+// MarshalDescending offers an inverse of the lexicographicaly sortable standard
+// MarshalText encoding, which allows sorting IDs in descending order.
+func (id Id) MarshalDescending() string {
+	var dst [EncodedSize]byte
+	// Optimized unrolled loop ahead.
+	// From https://github.com/RobThree/NUlid
+
+	// 10 byte timestamp
+	dst[0] = rEncoding[(id[0]&224)>>5]
+	dst[1] = rEncoding[id[0]&31]
+	dst[2] = rEncoding[(id[1]&248)>>3]
+	dst[3] = rEncoding[((id[1]&7)<<2)|((id[2]&192)>>6)]
+	dst[4] = rEncoding[(id[2]&62)>>1]
+	dst[5] = rEncoding[((id[2]&1)<<4)|((id[3]&240)>>4)]
+	dst[6] = rEncoding[((id[3]&15)<<1)|((id[4]&128)>>7)]
+	dst[7] = rEncoding[(id[4]&124)>>2]
+	dst[8] = rEncoding[((id[4]&3)<<3)|((id[5]&224)>>5)]
+	dst[9] = rEncoding[id[5]&31]
+
+	// 16 bytes of entropy
+	dst[10] = rEncoding[(id[6]&248)>>3]
+	dst[11] = rEncoding[((id[6]&7)<<2)|((id[7]&192)>>6)]
+	dst[12] = rEncoding[(id[7]&62)>>1]
+	dst[13] = rEncoding[((id[7]&1)<<4)|((id[8]&240)>>4)]
+	dst[14] = rEncoding[((id[8]&15)<<1)|((id[9]&128)>>7)]
+	dst[15] = rEncoding[(id[9]&124)>>2]
+	dst[16] = rEncoding[((id[9]&3)<<3)|((id[10]&224)>>5)]
+	dst[17] = rEncoding[id[10]&31]
+	dst[18] = rEncoding[(id[11]&248)>>3]
+	dst[19] = rEncoding[((id[11]&7)<<2)|((id[12]&192)>>6)]
+	dst[20] = rEncoding[(id[12]&62)>>1]
+	dst[21] = rEncoding[((id[12]&1)<<4)|((id[13]&240)>>4)]
+	dst[22] = rEncoding[((id[13]&15)<<1)|((id[14]&128)>>7)]
+	dst[23] = rEncoding[(id[14]&124)>>2]
+	dst[24] = rEncoding[((id[14]&3)<<3)|((id[15]&224)>>5)]
+	dst[25] = rEncoding[id[15]&31]
+
+	return string(dst[:])
+}
 
 // MarshalText implements the encoding.TextMarshaler interface by
 // returning the string encoded Id.
