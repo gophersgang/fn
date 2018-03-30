@@ -23,6 +23,7 @@ import (
 	"github.com/fnproject/fn/api/agent/hybrid"
 	"github.com/fnproject/fn/api/common"
 	"github.com/fnproject/fn/api/datastore"
+	"github.com/fnproject/fn/api/id"
 	"github.com/fnproject/fn/api/logs"
 	"github.com/fnproject/fn/api/models"
 	"github.com/fnproject/fn/api/mqs"
@@ -510,6 +511,7 @@ func New(ctx context.Context, opts ...ServerOption) *Server {
 		}
 	}
 
+	setMachineID()
 	s.Router.Use(loggerWrap, traceWrap, panicWrap) // TODO should be opts
 	optionalCorsWrap(s.Router)                     // TODO should be an opt
 	s.bindHandlers(ctx)
@@ -688,6 +690,16 @@ func getPidList() ([]int, error) {
 		}
 	}
 	return pids, nil
+}
+
+func setMachineID() {
+	port := uint16(getEnvInt(EnvPort, DefaultPort))
+	addr := whoAmI().To4()
+	if addr == nil {
+		addr = net.ParseIP("127.0.0.1").To4()
+		logrus.Warn("could not find non-local ipv4 address to use, using '127.0.0.1' for ids, if this is a cluster beware of duplicate ids!")
+	}
+	id.SetMachineIdHost(addr, port)
 }
 
 // whoAmI searches for a non-local address on any network interface, returning

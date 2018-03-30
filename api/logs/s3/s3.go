@@ -262,10 +262,7 @@ func flipCursor(oid string) string {
 		return ""
 	}
 
-	// e.g.: 01C860Z3M9A7WHJ00000000000
-	var rid id.Id
-	copy(rid[:], oid)
-	return rid.MarshalDescending()[:len(oid)]
+	return id.DescendingEncoding(oid)
 }
 
 func callMarkerKey(app, path, id string) string {
@@ -313,10 +310,22 @@ func (s *store) GetCalls(ctx context.Context, filter *models.CallFilter) ([]*mod
 	//
 	// also s3 api returns sorted in lexicographic order, we need the reverse of this.
 
-	// we need to use first 48 bits of id to approximate created_at, to skip over records
-	// if looking far into the past.
-	mid := ""
-	if t := time.Time(filter.ToTime); !t.IsZero() {
+	// marker is either a provided marker, or a key we create based on parameters
+	// that contains app_id, may be a marker key if path is provided, and may
+	// have a time guesstimate if to time is provided.
+
+	var marker string
+
+	// filter.Cursor is a call id, translate to our key format. if a path is
+	// provided, we list keys from markers instead.
+	if filter.Cursor != "" {
+		marker = callKey(filter.AppID, filter.Cursor)
+		if filter.Path != "" {
+			marker = callMarkerKey(filter.AppID, filter.Path, filter.Cursor)
+		}
+	} else if t := time.Time(filter.ToTime); !t.IsZero() {
+		// we need to use first 48 bits of id to approximate created_at, to skip over records
+		// if looking far into the past to save time.
 		ms := uint64(t.Unix()*1000) + uint64(t.Nanosecond()/int(time.Millisecond))
 		var buf id.Id
 		buf[0] = byte(ms >> 40)
@@ -325,23 +334,18 @@ func (s *store) GetCalls(ctx context.Context, filter *models.CallFilter) ([]*mod
 		buf[3] = byte(ms >> 16)
 		buf[4] = byte(ms >> 8)
 		buf[5] = byte(ms)
-		mid = buf.String()[:10]
+		mid := buf.String()[:10]
 		// timestamp is first 10 bytes of string encoded
-	}
-
-	prefix := callKey(filter.AppID, mid)
-	if filter.Path != "" {
-		prefix = callMarkerKey(filter.AppID, filter.Path, mid)
-	}
-
-	// filter.Cursor is a call id, translate to our key format. if a path is
-	// provided, we list keys from markers instead.
-	var marker string
-	if filter.Cursor != "" {
-		marker = callKey(filter.AppID, filter.Cursor)
+		marker = callKey(filter.AppID, mid)
 		if filter.Path != "" {
-			marker = callMarkerKey(filter.AppID, filter.Path, filter.Cursor)
+			marker = callMarkerKey(filter.AppID, filter.Path, mid)
 		}
+	}
+
+	// prefix prevents leaving bounds of app or path marker keys
+	prefix := callKey(filter.AppID, "")
+	if filter.Path != "" {
+		prefix = callMarkerKey(filter.AppID, filter.Path, "")
 	}
 
 	input := &s3.ListObjectsInput{

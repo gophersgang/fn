@@ -2,31 +2,60 @@ package id
 
 import (
 	"errors"
-	"io"
+	"net"
+	"strings"
+	"sync/atomic"
 	"time"
-
-	"github.com/fnproject/fn/api/common"
 )
-
-// NOTE: this is basically oklog/ulid, with an additional modification
-// for a reverse lexicographic encoding and an easier constructor.
 
 type Id [16]byte
 
 var (
-	entropy = common.NewRNG(time.Now().UnixNano())
+	machineID uint64
+	counter   uint32
 )
 
+// SetMachineId may only be called by one thread before any id generation
+// is done. It must be set if multiple machines are generating ids in order
+// to avoid collisions. Only the least significant 48 bits are used.
+func SetMachineId(ID uint64) {
+	machineID = ID
+}
+
+// SetMachineIdHost is a convenience wrapper to hide bit twiddling of
+// calling SetMachineId, it has the same constraints as SetMachineId
+// with an addition that net.IP must be a ipv4 address.
+func SetMachineIdHost(addr net.IP, port uint16) {
+	var machineID uint64 // 48 bits
+	machineID |= uint64(addr[0]) << 40
+	machineID |= uint64(addr[1]) << 32
+	machineID |= uint64(addr[2]) << 24
+	machineID |= uint64(addr[3]) << 16
+	machineID |= uint64(port)
+
+	SetMachineId(machineID)
+}
+
+// New will generate a new Id for use. New is safe to be called from
+// concurrent threads. SetMachineId should be called once before any calls to
+// New are made. 2^32 calls to New per millisecond will be unique, provided
+// machine id is seeded correctly across machines.
+//
+// binary format: [ [ 48 bits time ] [ 48 bits machineID ] [ 32 bits counter ] ]
+//
+// Ids are sortable within (not between, thanks to clocks) each machine, with
+// a modified base32 encoding exposed for convenience in API usage.
 func New() Id {
-	return newID(timestamp(time.Now()), entropy)
+	t := time.Now()
+	// NOTE compiler optimizes out division by constant for us
+	ms := uint64(t.Unix())*1000 + uint64(t.Nanosecond()/int(time.Millisecond))
+	count := atomic.AddUint32(&counter, 1)
+	return newID(ms, machineID, count)
 }
 
-func NewWithTime(t time.Time) Id {
-	return newID(timestamp(t), entropy)
-}
-
-func newID(ms uint64, entropy io.Reader) Id {
+func newID(ms, machineID uint64, count uint32) Id {
 	var id Id
+
 	id[0] = byte(ms >> 40)
 	id[1] = byte(ms >> 32)
 	id[2] = byte(ms >> 24)
@@ -34,24 +63,22 @@ func newID(ms uint64, entropy io.Reader) Id {
 	id[4] = byte(ms >> 8)
 	id[5] = byte(ms)
 
-	if entropy != nil {
-		entropy.Read(id[6:])
-	}
+	id[6] = byte(machineID >> 40)
+	id[7] = byte(machineID >> 32)
+	id[8] = byte(machineID >> 24)
+	id[9] = byte(machineID >> 16)
+	id[10] = byte(machineID >> 8)
+	id[11] = byte(machineID)
+
+	id[12] = byte(count >> 24)
+	id[13] = byte(count >> 16)
+	id[14] = byte(count >> 8)
+	id[15] = byte(count)
 
 	return id
 }
 
-// timestamp converts a time.Time to Unix milliseconds.
-func timestamp(t time.Time) uint64 {
-	return uint64(t.Unix())*1000 +
-		uint64(t.Nanosecond()/int(time.Millisecond))
-}
-
-const (
-	// encoding is the base 32 encoding alphabet used in Id strings.
-	encoding    = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
-	encodedSize = 26
-)
+// following encodings are slightly modified from https://github.com/oklog/ulid
 
 // String returns a lexicographically sortable string encoded Id
 // (26 characters, non-standard base 32) e.g. 01AN4Z07BY79KA1307SR9X4MV3
@@ -216,7 +243,7 @@ func (id *Id) UnmarshalText(v []byte) error {
 }
 
 // reverse encoding useful for sorting, descending
-var rEncoding = reverseString(encoding)
+var rEncoding = reverseString(Encoding)
 
 func reverseString(input string) string {
 	// rsc: http://groups.google.com/group/golang-nuts/browse_thread/thread/a0fb81698275eede
@@ -238,42 +265,13 @@ func reverseString(input string) string {
 	return string(rune)
 }
 
-// MarshalDescending offers an inverse of the lexicographicaly sortable standard
-// MarshalText encoding, which allows sorting IDs in descending order.
-func (id Id) MarshalDescending() string {
-	var dst [encodedSize]byte
-	// Optimized unrolled loop ahead.
-	// From https://github.com/RobThree/NUlid
-
-	// 10 byte timestamp
-	dst[0] = rEncoding[(id[0]&224)>>5]
-	dst[1] = rEncoding[id[0]&31]
-	dst[2] = rEncoding[(id[1]&248)>>3]
-	dst[3] = rEncoding[((id[1]&7)<<2)|((id[2]&192)>>6)]
-	dst[4] = rEncoding[(id[2]&62)>>1]
-	dst[5] = rEncoding[((id[2]&1)<<4)|((id[3]&240)>>4)]
-	dst[6] = rEncoding[((id[3]&15)<<1)|((id[4]&128)>>7)]
-	dst[7] = rEncoding[(id[4]&124)>>2]
-	dst[8] = rEncoding[((id[4]&3)<<3)|((id[5]&224)>>5)]
-	dst[9] = rEncoding[id[5]&31]
-
-	// 16 bytes of entropy
-	dst[10] = rEncoding[(id[6]&248)>>3]
-	dst[11] = rEncoding[((id[6]&7)<<2)|((id[7]&192)>>6)]
-	dst[12] = rEncoding[(id[7]&62)>>1]
-	dst[13] = rEncoding[((id[7]&1)<<4)|((id[8]&240)>>4)]
-	dst[14] = rEncoding[((id[8]&15)<<1)|((id[9]&128)>>7)]
-	dst[15] = rEncoding[(id[9]&124)>>2]
-	dst[16] = rEncoding[((id[9]&3)<<3)|((id[10]&224)>>5)]
-	dst[17] = rEncoding[id[10]&31]
-	dst[18] = rEncoding[(id[11]&248)>>3]
-	dst[19] = rEncoding[((id[11]&7)<<2)|((id[12]&192)>>6)]
-	dst[20] = rEncoding[(id[12]&62)>>1]
-	dst[21] = rEncoding[((id[12]&1)<<4)|((id[13]&240)>>4)]
-	dst[22] = rEncoding[((id[13]&15)<<1)|((id[14]&128)>>7)]
-	dst[23] = rEncoding[(id[14]&124)>>2]
-	dst[24] = rEncoding[((id[14]&3)<<3)|((id[15]&224)>>5)]
-	dst[25] = rEncoding[id[15]&31]
-
-	return string(dst[:])
+func DescendingEncoding(src string) string {
+	var buf [EncodedSize]byte
+	copy(buf[:], src)
+	for i, s := range buf[:len(src)] {
+		// XXX(reed): optimize as dec is
+		j := strings.Index(Encoding, string(s))
+		buf[i] = rEncoding[j]
+	}
+	return string(buf[:])
 }

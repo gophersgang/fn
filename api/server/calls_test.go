@@ -117,10 +117,10 @@ func TestCallList(t *testing.T) {
 	c2 := *call
 	c3 := *call
 	c2.CreatedAt = strfmt.DateTime(time.Now().Add(100 * time.Second))
-	c2.ID = id.NewWithTime(time.Time(c2.CreatedAt)).String()
+	c2.ID = id.New().String()
 	c2.Path = "test2"
 	c3.CreatedAt = strfmt.DateTime(time.Now().Add(200 * time.Second))
-	c3.ID = id.NewWithTime(time.Time(c3.CreatedAt)).String()
+	c3.ID = id.New().String()
 	c3.Path = "/test3"
 
 	rnr, cancel := testRunner(t)

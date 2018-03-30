@@ -49,7 +49,7 @@ func Test(t *testing.T, fnl models.LogStore) {
 		filter := &models.CallFilter{AppID: call.AppID, Path: call.Path, PerPage: 100}
 		now := time.Now()
 		call.CreatedAt = strfmt.DateTime(now)
-		call.ID = id.NewWithTime(now).String()
+		call.ID = id.New().String()
 		err := fnl.InsertCall(ctx, call)
 		if err != nil {
 			t.Fatal(err)
@@ -66,11 +66,11 @@ func Test(t *testing.T, fnl models.LogStore) {
 		c3 := *call
 		now = time.Now().Add(100 * time.Millisecond)
 		c2.CreatedAt = strfmt.DateTime(now) // add ms cuz db uses it for sort
-		c2.ID = id.NewWithTime(now).String()
+		c2.ID = id.New().String()
 
 		now = time.Now().Add(200 * time.Millisecond)
 		c3.CreatedAt = strfmt.DateTime(now)
-		c3.ID = id.NewWithTime(now).String()
+		c3.ID = id.New().String()
 
 		err = fnl.InsertCall(ctx, &c2)
 		if err != nil {
