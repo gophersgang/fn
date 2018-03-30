@@ -212,7 +212,7 @@ func (s *store) InsertCall(ctx context.Context, call *models.Call) error {
 		ContentType: aws.String("text/plain"),
 	}
 
-	logrus.WithFields(logrus.Fields{"bucketName": s.bucket, "key": objectName}).Debug("Uploading call")
+	logrus.WithFields(logrus.Fields{"bucketName": s.bucket, "key": objectName}).Debug("Uploading call marker")
 	_, err = s.uploader.UploadWithContext(ctx, params)
 	if err != nil {
 		// XXX(reed): we could just log this?
@@ -334,8 +334,6 @@ func (s *store) GetCalls(ctx context.Context, filter *models.CallFilter) ([]*mod
 		prefix = callMarkerKey(filter.AppID, filter.Path, mid)
 	}
 
-	logrus.Infoln("prefix=", prefix, " app=", filter.AppID, " path=", filter.Path, " id=", mid)
-
 	// filter.Cursor is a call id, translate to our key format. if a path is
 	// provided, we list keys from markers instead.
 	var marker string
@@ -357,8 +355,6 @@ func (s *store) GetCalls(ctx context.Context, filter *models.CallFilter) ([]*mod
 	if err != nil {
 		return nil, fmt.Errorf("failed to list logs: %v", err)
 	}
-
-	logrus.Infoln("listo", len(result.Contents), *input.Marker, *input.Prefix)
 
 	// TODO we could add an additional check here to slice to per page if the api doesn't
 	// implement the max keys parameter (and we probably should...)
@@ -395,8 +391,6 @@ func (s *store) GetCalls(ctx context.Context, filter *models.CallFilter) ([]*mod
 			common.Logger(ctx).WithError(err).WithFields(logrus.Fields{"app": app, "id": id}).Error("error filling call object")
 			continue
 		}
-
-		logrus.Infoln("SUP", call.ID, time.Time(filter.FromTime).Format(time.RFC3339Nano), time.Time(call.CreatedAt).Format(time.RFC3339Nano), time.Time(filter.ToTime).Format(time.RFC3339Nano))
 
 		// ensure: from_time < created_at < to_time
 		fromTime := time.Time(filter.FromTime).Truncate(time.Millisecond)
