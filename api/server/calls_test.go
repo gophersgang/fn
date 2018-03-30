@@ -18,6 +18,11 @@ import (
 
 func TestCallGet(t *testing.T) {
 	buf := setLogBuffer()
+	defer func() {
+		if t.Failed() {
+			t.Log(buf.String())
+		}
+	}()
 
 	app := &models.App{Name: "myapp"}
 	app.SetDefaults()
@@ -62,7 +67,6 @@ func TestCallGet(t *testing.T) {
 		_, rec := routerRequest(t, srv.Router, "GET", test.path, nil)
 
 		if rec.Code != test.expectedCode {
-			t.Log(buf.String())
 			t.Log(rec.Body.String())
 			t.Errorf("Test %d: Expected status code to be %d but was %d",
 				i, test.expectedCode, rec.Code)
@@ -72,7 +76,6 @@ func TestCallGet(t *testing.T) {
 			resp := getErrorResponse(t, rec)
 
 			if !strings.Contains(resp.Error.Message, test.expectedError.Error()) {
-				t.Log(buf.String())
 				t.Log(resp.Error.Message)
 				t.Log(rec.Body.String())
 				t.Errorf("Test %d: Expected error message to have `%s`",
@@ -85,6 +88,11 @@ func TestCallGet(t *testing.T) {
 
 func TestCallList(t *testing.T) {
 	buf := setLogBuffer()
+	defer func() {
+		if t.Failed() {
+			t.Log(buf.String())
+		}
+	}()
 
 	app := &models.App{Name: "myapp"}
 	app.SetDefaults()
@@ -155,7 +163,6 @@ func TestCallList(t *testing.T) {
 		_, rec := routerRequest(t, srv.Router, "GET", test.path, nil)
 
 		if rec.Code != test.expectedCode {
-			t.Log(buf.String())
 			t.Errorf("Test %d: Expected status code to be %d but was %d",
 				i, test.expectedCode, rec.Code)
 		}
@@ -164,7 +171,6 @@ func TestCallList(t *testing.T) {
 			resp := getErrorResponse(t, rec)
 
 			if resp.Error == nil || !strings.Contains(resp.Error.Message, test.expectedError.Error()) {
-				t.Log(buf.String())
 				t.Errorf("Test %d: Expected error message to have `%s`, got: `%s`",
 					i, test.expectedError.Error(), resp.Error)
 			}

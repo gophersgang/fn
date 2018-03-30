@@ -186,7 +186,6 @@ func (s *store) InsertCall(ctx context.Context, call *models.Call) error {
 	cr := &countingReader{r: bytes.NewReader(byts)}
 
 	objectName := callKey(call.AppID, call.ID)
-	fmt.Println("YODAWG", objectName, call.ID)
 	params := &s3manager.UploadInput{
 		Bucket:      aws.String(s.bucket),
 		Key:         aws.String(objectName),
@@ -317,7 +316,7 @@ func (s *store) GetCalls(ctx context.Context, filter *models.CallFilter) ([]*mod
 	// we need to use first 48 bits of id to approximate created_at, to skip over records
 	// if looking far into the past.
 	mid := ""
-	if t := time.Time(filter.FromTime); !t.IsZero() {
+	if t := time.Time(filter.ToTime); !t.IsZero() {
 		ms := uint64(t.Unix()*1000) + uint64(t.Nanosecond()/int(time.Millisecond))
 		var buf id.Id
 		buf[0] = byte(ms >> 40)
@@ -335,7 +334,7 @@ func (s *store) GetCalls(ctx context.Context, filter *models.CallFilter) ([]*mod
 		prefix = callMarkerKey(filter.AppID, filter.Path, mid)
 	}
 
-	fmt.Println("prefix", prefix, "app", filter.AppID, "path", filter.Path, "id", mid)
+	logrus.Infoln("prefix=", prefix, " app=", filter.AppID, " path=", filter.Path, " id=", mid)
 
 	// filter.Cursor is a call id, translate to our key format. if a path is
 	// provided, we list keys from markers instead.
@@ -359,7 +358,7 @@ func (s *store) GetCalls(ctx context.Context, filter *models.CallFilter) ([]*mod
 		return nil, fmt.Errorf("failed to list logs: %v", err)
 	}
 
-	fmt.Println("listo", len(result.Contents), *input.Marker, *input.Prefix)
+	logrus.Infoln("listo", len(result.Contents), *input.Marker, *input.Prefix)
 
 	// TODO we could add an additional check here to slice to per page if the api doesn't
 	// implement the max keys parameter (and we probably should...)
@@ -397,16 +396,18 @@ func (s *store) GetCalls(ctx context.Context, filter *models.CallFilter) ([]*mod
 			continue
 		}
 
-		if t := time.Time(filter.FromTime); !t.IsZero() && time.Time(call.CreatedAt).Before(t) {
-			// look at ones in the future
+		logrus.Infoln("SUP", call.ID, time.Time(filter.FromTime).Format(time.RFC3339Nano), time.Time(call.CreatedAt).Format(time.RFC3339Nano), time.Time(filter.ToTime).Format(time.RFC3339Nano))
+
+		// ensure: from_time < created_at < to_time
+		fromTime := time.Time(filter.FromTime).Truncate(time.Millisecond)
+		if !fromTime.IsZero() && !fromTime.Before(time.Time(call.CreatedAt)) {
+			// NOTE could break, ids and created_at aren't necessarily in perfect order
 			continue
 		}
 
-		if t := time.Time(filter.ToTime); !t.IsZero() && !time.Time(call.CreatedAt).Before(t) {
-			// make sure it fits our time bounds. break, and assume this is it, even
-			// though that may not be the case since id and created at are not the same, it's a
-			// pretty good approximation
-			break
+		toTime := time.Time(filter.ToTime).Truncate(time.Millisecond)
+		if !toTime.IsZero() && !time.Time(call.CreatedAt).Before(toTime) {
+			continue
 		}
 
 		calls = append(calls, call)
