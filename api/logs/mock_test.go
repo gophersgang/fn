@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-func TestDatastore(t *testing.T) {
+func TestMock(t *testing.T) {
 	ls := NewMock()
 	logTesting.Test(t, ls)
 }

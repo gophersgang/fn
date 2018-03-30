@@ -265,6 +265,9 @@ func reverseString(input string) string {
 	return string(rune)
 }
 
+// DescendingEncoding returns a lexicographically sortable descending encoding
+// of a given id, e.g. 000 -> ZZZ, which allows reversing the sort order when stored
+// contiguously.
 func DescendingEncoding(src string) string {
 	var buf [EncodedSize]byte
 	copy(buf[:], src)

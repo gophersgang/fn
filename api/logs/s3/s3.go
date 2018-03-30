@@ -80,7 +80,8 @@ func createStore(bucketName, endpoint, region, accessKeyID, secretAccessKey stri
 	}
 }
 
-// s3://access_key_id:secret_access_key@host/region/bucket_name?ssl=true
+// New returns an s3 api compatible log store.
+// url format: s3://access_key_id:secret_access_key@host/region/bucket_name?ssl=true
 // Note that access_key_id and secret_access_key must be URL encoded if they contain unsafe characters!
 func New(u *url.URL) (models.LogStore, error) {
 	endpoint := u.Host
@@ -183,13 +184,11 @@ func (s *store) InsertCall(ctx context.Context, call *models.Call) error {
 		return err
 	}
 
-	cr := &countingReader{r: bytes.NewReader(byts)}
-
 	objectName := callKey(call.AppID, call.ID)
 	params := &s3manager.UploadInput{
 		Bucket:      aws.String(s.bucket),
 		Key:         aws.String(objectName),
-		Body:        cr,
+		Body:        bytes.NewReader(byts),
 		ContentType: aws.String("text/plain"),
 	}
 
@@ -200,9 +199,9 @@ func (s *store) InsertCall(ctx context.Context, call *models.Call) error {
 	}
 
 	// at this point, they can point lookup the log and it will work. now, we can try to upload
-	// the marker key. if the marker key upload fails, the user will simply not see this entry
-	// when listing AND specifying a route path. (NOTE: this behavior will go away if we stop listing
-	// by route -> triggers)
+	// the marker key. if the marker key upload fails, the user will simply not
+	// see this entry when listing only when specifying a route path. (NOTE: this
+	// behavior will go away if we stop listing by route -> triggers)
 
 	objectName = callMarkerKey(call.AppID, call.Path, call.ID)
 	params = &s3manager.UploadInput{
@@ -360,14 +359,15 @@ func (s *store) GetCalls(ctx context.Context, filter *models.CallFilter) ([]*mod
 		return nil, fmt.Errorf("failed to list logs: %v", err)
 	}
 
-	// TODO we could add an additional check here to slice to per page if the api doesn't
-	// implement the max keys parameter (and we probably should...)
 	calls := make([]*models.Call, 0, len(result.Contents))
 
 	for _, obj := range result.Contents {
+		if len(calls) == filter.PerPage {
+			break
+		}
+
 		// extract the app and id from the key to lookup the object, this also
 		// validates we aren't reading strangely keyed objects from the bucket.
-
 		var app, id string
 		if filter.Path != "" {
 			fields := strings.Split(*obj.Key, "/")
